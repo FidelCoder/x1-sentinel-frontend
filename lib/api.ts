@@ -1,4 +1,4 @@
-import { CheckResult, ReportReason, SafetyReport } from '@/types/safety';
+import { ChainConfig, CheckResult, ReportReason, SafetyReport } from '@/types/safety';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4010';
 
@@ -29,6 +29,15 @@ export const checkAddress = async (address: string): Promise<CheckResult> => {
   });
 
   return parseJson<CheckResult>(response);
+};
+
+export const getChainConfig = async (): Promise<ChainConfig> => {
+  const response = await fetch(`${API_BASE}/api/config`, {
+    method: 'GET',
+    cache: 'no-store'
+  });
+
+  return parseJson<ChainConfig>(response);
 };
 
 export const getRecentReports = async (limit = 8): Promise<SafetyReport[]> => {

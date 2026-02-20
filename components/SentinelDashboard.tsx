@@ -1,8 +1,17 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { checkAddress, getRecentReports, prepareReport } from '@/lib/api';
-import { CheckResult, ReportReason, SafetyReport } from '@/types/safety';
+import { checkAddress, getChainConfig, getRecentReports, prepareReport } from '@/lib/api';
+import { submitReportOnchain } from '@/lib/registry';
+import {
+  connectWallet,
+  ensureTargetNetwork,
+  getCurrentAccount,
+  getCurrentChainId,
+  isWalletInstalled,
+  subscribeWalletEvents
+} from '@/lib/wallet';
+import { ChainConfig, CheckResult, ReportReason, SafetyReport } from '@/types/safety';
 
 const reasons: ReportReason[] = ['Phishing', 'Scam', 'RugPull', 'MaliciousContract', 'Spam', 'Other'];
 
@@ -27,6 +36,11 @@ const shortAddress = (value: string): string => {
   return `${value.slice(0, 8)}...${value.slice(-6)}`;
 };
 
+const targetChainFromEnv = (): number => {
+  const value = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 0);
+  return Number.isFinite(value) ? value : 0;
+};
+
 export default function SentinelDashboard() {
   const [queryAddress, setQueryAddress] = useState('');
   const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
@@ -36,6 +50,14 @@ export default function SentinelDashboard() {
   const [recentReports, setRecentReports] = useState<SafetyReport[]>([]);
   const [reportFeedError, setReportFeedError] = useState<string | null>(null);
 
+  const [chainConfig, setChainConfig] = useState<ChainConfig | null>(null);
+  const [chainConfigError, setChainConfigError] = useState<string | null>(null);
+
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletChainId, setWalletChainId] = useState<number | null>(null);
+  const [walletStatus, setWalletStatus] = useState<string | null>(null);
+  const [connectingWallet, setConnectingWallet] = useState(false);
+
   const [draftAddress, setDraftAddress] = useState('');
   const [draftNameTag, setDraftNameTag] = useState('');
   const [draftReason, setDraftReason] = useState<ReportReason>('Phishing');
@@ -43,19 +65,41 @@ export default function SentinelDashboard() {
   const [draftMessage, setDraftMessage] = useState<string | null>(null);
   const [draftPayload, setDraftPayload] = useState<string>('');
   const [submittingDraft, setSubmittingDraft] = useState(false);
+  const [submittingOnchain, setSubmittingOnchain] = useState(false);
 
   useEffect(() => {
-    const loadReports = async (): Promise<void> => {
+    const loadBootstrap = async (): Promise<void> => {
       try {
-        const reports = await getRecentReports(6);
+        const [reports, config] = await Promise.all([getRecentReports(6), getChainConfig()]);
         setRecentReports(reports);
+        setChainConfig(config);
         setReportFeedError(null);
+        setChainConfigError(null);
       } catch (error) {
-        setReportFeedError(error instanceof Error ? error.message : 'Unable to load reports');
+        const message = error instanceof Error ? error.message : 'Unable to load dashboard data';
+        setReportFeedError(message);
+        setChainConfigError(message);
+      }
+
+      try {
+        const [account, chainId] = await Promise.all([getCurrentAccount(), getCurrentChainId()]);
+        setWalletAddress(account);
+        setWalletChainId(chainId);
+      } catch {
+        setWalletAddress(null);
       }
     };
 
-    void loadReports();
+    void loadBootstrap();
+
+    return subscribeWalletEvents(
+      (accounts) => {
+        setWalletAddress(accounts[0] ?? null);
+      },
+      (chainHex) => {
+        setWalletChainId(Number.parseInt(chainHex, 16));
+      }
+    );
   }, []);
 
   const runCheck = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -103,12 +147,76 @@ export default function SentinelDashboard() {
     }
   };
 
+  const handleConnectWallet = async (): Promise<void> => {
+    if (!isWalletInstalled()) {
+      setWalletStatus('Wallet extension not found. Install MetaMask or another EVM wallet.');
+      return;
+    }
+
+    setConnectingWallet(true);
+    setWalletStatus(null);
+
+    try {
+      const account = await connectWallet();
+      await ensureTargetNetwork();
+      const chainId = await getCurrentChainId();
+      setWalletAddress(account);
+      setWalletChainId(chainId);
+      setWalletStatus('Wallet connected.');
+    } catch (error) {
+      setWalletStatus(error instanceof Error ? error.message : 'Unable to connect wallet');
+    } finally {
+      setConnectingWallet(false);
+    }
+  };
+
+  const handleOnchainSubmit = async (): Promise<void> => {
+    setSubmittingOnchain(true);
+    setDraftMessage(null);
+
+    try {
+      if (!walletAddress) {
+        throw new Error('Connect wallet before onchain submission.');
+      }
+
+      const payload = await prepareReport({
+        targetAddress: draftAddress.trim(),
+        nameTag: draftNameTag.trim(),
+        reason: draftReason,
+        evidence: draftEvidence.trim()
+      });
+
+      await ensureTargetNetwork();
+
+      const tx = await submitReportOnchain({
+        targetAddress: payload.params.targetAddress,
+        nameTag: payload.params.nameTag,
+        reasonCode: payload.params.reason,
+        evidence: payload.params.evidence
+      });
+
+      setDraftMessage(`Transaction submitted: ${tx.hash}`);
+      setDraftPayload(JSON.stringify({ txHash: tx.hash }, null, 2));
+
+      await tx.wait();
+      setDraftMessage(`Transaction confirmed: ${tx.hash}`);
+    } catch (error) {
+      setDraftMessage(error instanceof Error ? error.message : 'Onchain submission failed');
+    } finally {
+      setSubmittingOnchain(false);
+    }
+  };
+
   const riskTone = useMemo(() => {
     if (!checkResult) {
       return 'clean';
     }
     return scoreTone(checkResult.riskScore);
   }, [checkResult]);
+
+  const targetChainId = chainConfig?.chainId || targetChainFromEnv();
+  const walletNetworkMismatch =
+    targetChainId > 0 && walletChainId !== null ? walletChainId !== targetChainId : false;
 
   return (
     <main className="page-shell">
@@ -119,6 +227,28 @@ export default function SentinelDashboard() {
           Query wallet safety, inspect report signals, and prepare immutable incident submissions from a single
           operations view.
         </p>
+
+        <div className="hero-row">
+          <div className="hero-card">
+            <h3>Chain Mode</h3>
+            <p>
+              {chainConfig ? `${chainConfig.chainName} · ${chainConfig.mode}` : 'Loading chain configuration...'}
+            </p>
+            {chainConfigError && <p className="status status-error">{chainConfigError}</p>}
+          </div>
+
+          <div className="hero-card">
+            <h3>Wallet</h3>
+            <p>{walletAddress ? shortAddress(walletAddress) : 'Not connected'}</p>
+            <button type="button" onClick={handleConnectWallet} disabled={connectingWallet}>
+              {connectingWallet ? 'Connecting...' : walletAddress ? 'Reconnect Wallet' : 'Connect Wallet'}
+            </button>
+            {walletNetworkMismatch && (
+              <p className="status status-warn">Wrong network detected. Switch to chain id {targetChainId}.</p>
+            )}
+            {walletStatus && <p className="status status-info">{walletStatus}</p>}
+          </div>
+        </div>
       </section>
 
       <section className="layout-grid">
@@ -213,8 +343,10 @@ export default function SentinelDashboard() {
       </section>
 
       <section className="panel reveal-4">
-        <h2>Prepare Report Payload</h2>
-        <p className="muted">This draft flow prepares the transaction payload for wallet signing.</p>
+        <h2>Report Submission</h2>
+        <p className="muted">
+          Draft payload with API validation, then submit onchain through your connected wallet.
+        </p>
 
         <form className="draft-form" onSubmit={submitDraft}>
           <input
@@ -244,9 +376,20 @@ export default function SentinelDashboard() {
             minLength={10}
             required
           />
-          <button type="submit" disabled={submittingDraft}>
-            {submittingDraft ? 'Preparing...' : 'Prepare Payload'}
-          </button>
+
+          <div className="action-row">
+            <button type="submit" disabled={submittingDraft}>
+              {submittingDraft ? 'Preparing...' : 'Prepare Payload'}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleOnchainSubmit}
+              disabled={submittingOnchain || !walletAddress}
+            >
+              {submittingOnchain ? 'Submitting...' : 'Submit Onchain'}
+            </button>
+          </div>
         </form>
 
         {draftMessage && <p className="status status-info">{draftMessage}</p>}
