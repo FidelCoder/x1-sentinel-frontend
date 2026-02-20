@@ -343,6 +343,12 @@ button.secondary {
   border: 1px solid rgba(8, 121, 111, 0.32);
 }
 
+.status-ok {
+  background: rgba(14, 143, 97, 0.14);
+  color: #0a5c3d;
+  border: 1px solid rgba(14, 143, 97, 0.35);
+}
+
 .status-warn {
   background: rgba(216, 119, 29, 0.16);
   color: #6f3f0e;

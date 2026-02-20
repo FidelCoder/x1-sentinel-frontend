@@ -29,3 +29,5 @@ Open `http://localhost:3000`.
 - Recent community reports
 - Report payload preparation flow
 - Wallet connection + onchain report submission
+- Onchain voting and report resolution actions
+- Transaction-status tracking (prepare, sign, submit, confirm, error)

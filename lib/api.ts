@@ -75,3 +75,47 @@ export const prepareReport = async (input: {
 
   return parseJson(response);
 };
+
+export const prepareVote = async (
+  reportId: number,
+  upvote: boolean
+): Promise<{
+  message: string;
+  method: string;
+  params: {
+    reportId: number;
+    upvote: boolean;
+  };
+}> => {
+  const response = await fetch(`${API_BASE}/api/reports/${reportId}/vote`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ upvote })
+  });
+
+  return parseJson(response);
+};
+
+export const prepareResolve = async (
+  reportId: number,
+  malicious: boolean
+): Promise<{
+  message: string;
+  method: string;
+  params: {
+    reportId: number;
+    malicious: boolean;
+  };
+}> => {
+  const response = await fetch(`${API_BASE}/api/reports/${reportId}/resolve`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ malicious })
+  });
+
+  return parseJson(response);
+};

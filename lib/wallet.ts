@@ -1,4 +1,5 @@
 import { BrowserProvider } from 'ethers';
+import { ChainConfig } from '@/types/safety';
 
 interface Eip1193Provider {
   request(args: { method: string; params?: unknown[] | Record<string, unknown> }): Promise<unknown>;
@@ -6,7 +7,11 @@ interface Eip1193Provider {
   removeListener?(eventName: string, listener: (...args: unknown[]) => void): void;
 }
 
-const getTargetChainId = (): number => {
+const getTargetChainId = (chainIdOverride?: number): number => {
+  if (chainIdOverride && chainIdOverride > 0) {
+    return chainIdOverride;
+  }
+
   const fromEnv = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? 0);
   return Number.isFinite(fromEnv) ? fromEnv : 0;
 };
@@ -68,13 +73,13 @@ export const getBrowserProvider = async (): Promise<BrowserProvider> => {
   return new BrowserProvider(provider);
 };
 
-export const ensureTargetNetwork = async (): Promise<void> => {
+export const ensureTargetNetwork = async (config?: Partial<ChainConfig>): Promise<void> => {
   const provider = getProvider();
   if (!provider) {
     throw new Error('Wallet extension not found');
   }
 
-  const targetChainId = getTargetChainId();
+  const targetChainId = getTargetChainId(config?.chainId);
 
   if (!targetChainId) {
     return;
@@ -88,7 +93,7 @@ export const ensureTargetNetwork = async (): Promise<void> => {
       params: [{ chainId: targetChainHex }]
     });
   } catch {
-    const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL ?? '';
+    const rpcUrl = config?.rpcUrl ?? process.env.NEXT_PUBLIC_RPC_URL ?? '';
     if (!rpcUrl) {
       throw new Error('Target network not available in wallet. Set NEXT_PUBLIC_RPC_URL to auto-add it.');
     }
@@ -98,15 +103,17 @@ export const ensureTargetNetwork = async (): Promise<void> => {
       params: [
         {
           chainId: targetChainHex,
-          chainName: process.env.NEXT_PUBLIC_CHAIN_NAME ?? 'X1 EcoChain',
+          chainName: config?.chainName ?? process.env.NEXT_PUBLIC_CHAIN_NAME ?? 'X1 EcoChain',
           nativeCurrency: {
-            name: process.env.NEXT_PUBLIC_CHAIN_CURRENCY_SYMBOL ?? 'X1',
-            symbol: process.env.NEXT_PUBLIC_CHAIN_CURRENCY_SYMBOL ?? 'X1',
+            name: config?.chainCurrencySymbol ?? process.env.NEXT_PUBLIC_CHAIN_CURRENCY_SYMBOL ?? 'X1',
+            symbol: config?.chainCurrencySymbol ?? process.env.NEXT_PUBLIC_CHAIN_CURRENCY_SYMBOL ?? 'X1',
             decimals: 18
           },
           rpcUrls: [rpcUrl],
-          blockExplorerUrls: process.env.NEXT_PUBLIC_CHAIN_EXPLORER_URL
-            ? [process.env.NEXT_PUBLIC_CHAIN_EXPLORER_URL]
+          blockExplorerUrls: config?.chainExplorerUrl
+            ? [config.chainExplorerUrl]
+            : process.env.NEXT_PUBLIC_CHAIN_EXPLORER_URL
+              ? [process.env.NEXT_PUBLIC_CHAIN_EXPLORER_URL]
             : []
         }
       ]
