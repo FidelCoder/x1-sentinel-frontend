@@ -22,6 +22,23 @@ Open `http://localhost:3000`.
 - `NEXT_PUBLIC_RPC_URL`: RPC URL used for wallet network auto-add
 - `NEXT_PUBLIC_CONTRACT_ADDRESS`: deployed registry contract address
 
+## Current Testnet Deployment
+
+- Network: `X1 EcoChain Testnet (Maculatus)`
+- Chain ID: `10778`
+- RPC: `https://maculatus-rpc.x1eco.com/`
+- Explorer: `https://maculatus-scan.x1eco.com/`
+- Contract (`X1SentinelRegistry`): `0xB36B20436b1D8f67CFbBF83D79F5C000E823418D`
+
+Frontend env values should align with:
+
+```bash
+NEXT_PUBLIC_CHAIN_ID=10778
+NEXT_PUBLIC_RPC_URL=https://maculatus-rpc.x1eco.com/
+NEXT_PUBLIC_CHAIN_EXPLORER_URL=https://maculatus-scan.x1eco.com/
+NEXT_PUBLIC_CONTRACT_ADDRESS=0xB36B20436b1D8f67CFbBF83D79F5C000E823418D
+```
+
 ## Prototype Scope
 
 - Address risk checks
