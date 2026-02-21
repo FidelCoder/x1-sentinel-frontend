@@ -99,6 +99,46 @@ h3,
   color: #2e1a07;
 }
 
+.wallet-picker {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.3rem;
+}
+
+.wallet-choice {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 0.12rem;
+  background: rgba(255, 255, 255, 0.92);
+  color: #123d36;
+  border: 1px solid rgba(8, 121, 111, 0.2);
+}
+
+.wallet-choice-title {
+  font-weight: 700;
+}
+
+.wallet-choice-meta {
+  font-size: 0.77rem;
+  opacity: 0.85;
+}
+
+.wallet-choice-state {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.wallet-choice-state-on {
+  color: #0e8f61;
+}
+
+.wallet-choice-state-off {
+  color: #bf3b2e;
+}
+
 .kicker {
   margin: 0;
   letter-spacing: 0.12em;

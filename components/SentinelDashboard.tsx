@@ -15,12 +15,20 @@ import {
   ensureTargetNetwork,
   getCurrentAccount,
   getCurrentChainId,
+  getWalletOptions,
   isWalletInstalled,
-  subscribeWalletEvents
+  subscribeWalletEvents,
+  WalletProviderId
 } from '@/lib/wallet';
 import { ChainConfig, CheckResult, ReportReason, SafetyReport, TxStatus } from '@/types/safety';
 
 const reasons: ReportReason[] = ['Phishing', 'Scam', 'RugPull', 'MaliciousContract', 'Spam', 'Other'];
+
+const walletProviderLabel = (wallet: WalletProviderId): string => {
+  if (wallet === 'metamask') return 'MetaMask';
+  if (wallet === 'trust') return 'Trust Wallet';
+  return 'Injected Wallet';
+};
 
 const riskLabel = (score: number): string => {
   if (score >= 70) return 'High';
@@ -69,6 +77,7 @@ export default function SentinelDashboard() {
   const [walletChainId, setWalletChainId] = useState<number | null>(null);
   const [walletStatus, setWalletStatus] = useState<string | null>(null);
   const [connectingWallet, setConnectingWallet] = useState(false);
+  const [walletPickerOpen, setWalletPickerOpen] = useState(false);
 
   const [draftAddress, setDraftAddress] = useState('');
   const [draftNameTag, setDraftNameTag] = useState('');
@@ -184,7 +193,7 @@ export default function SentinelDashboard() {
     }
   };
 
-  const handleConnectWallet = async (): Promise<void> => {
+  const handleConnectWallet = async (wallet: WalletProviderId): Promise<void> => {
     if (!isWalletInstalled()) {
       setWalletStatus('Wallet extension not found. Install MetaMask or another EVM wallet.');
       return;
@@ -194,12 +203,13 @@ export default function SentinelDashboard() {
     setWalletStatus(null);
 
     try {
-      const account = await connectWallet();
+      const account = await connectWallet(wallet);
       await ensureTargetNetwork(chainConfig ?? undefined);
       const chainId = await getCurrentChainId();
       setWalletAddress(account);
       setWalletChainId(chainId);
-      setWalletStatus('Wallet connected.');
+      setWalletStatus(`Wallet connected via ${walletProviderLabel(wallet)}.`);
+      setWalletPickerOpen(false);
     } catch (error) {
       setWalletStatus(error instanceof Error ? error.message : 'Unable to connect wallet');
     } finally {
@@ -350,6 +360,7 @@ export default function SentinelDashboard() {
     targetChainId > 0 && walletChainId !== null ? walletChainId !== targetChainId : false;
 
   const txStatusClass = `status ${txStatus.stage === 'error' ? 'status-error' : txStatus.stage === 'confirmed' ? 'status-ok' : 'status-info'}`;
+  const walletOptions = getWalletOptions();
 
   return (
     <main className="page-shell">
@@ -374,9 +385,34 @@ export default function SentinelDashboard() {
           <div className="hero-card">
             <h3>Wallet</h3>
             <p>{walletAddress ? shortAddress(walletAddress) : 'Not connected'}</p>
-            <button type="button" onClick={handleConnectWallet} disabled={connectingWallet}>
-              {connectingWallet ? 'Connecting...' : walletAddress ? 'Reconnect Wallet' : 'Connect Wallet'}
+            <button
+              type="button"
+              onClick={() => setWalletPickerOpen((open) => !open)}
+              disabled={connectingWallet}
+            >
+              {connectingWallet ? 'Connecting...' : walletAddress ? 'Switch Wallet' : 'Connect Wallet'}
             </button>
+            {walletPickerOpen && (
+              <div className="wallet-picker">
+                {walletOptions.map((wallet) => (
+                  <button
+                    key={wallet.id}
+                    type="button"
+                    className="wallet-choice"
+                    onClick={() => void handleConnectWallet(wallet.id)}
+                    disabled={connectingWallet || !wallet.installed}
+                  >
+                    <span className="wallet-choice-title">{wallet.label}</span>
+                    <span className="wallet-choice-meta">{wallet.description}</span>
+                    <span
+                      className={`wallet-choice-state ${wallet.installed ? 'wallet-choice-state-on' : 'wallet-choice-state-off'}`}
+                    >
+                      {wallet.installed ? 'Detected' : 'Not detected'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
             {walletNetworkMismatch && (
               <p className="status status-warn">Wrong network detected. Switch to chain id {targetChainId}.</p>
             )}
