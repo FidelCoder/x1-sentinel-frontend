@@ -12,6 +12,13 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+## Deploy to Vercel
+
+1. Import this repo in Vercel.
+2. Keep root directory as `./`.
+3. Set environment variables from `.env.local.example` and set `NEXT_PUBLIC_API_URL` to your deployed backend URL.
+4. Deploy.
+
 ## Environment
 
 - `NEXT_PUBLIC_API_URL`: backend base URL (default expected: `http://localhost:4010`)
@@ -30,7 +37,9 @@ Open `http://localhost:3000`.
 - Chain ID: `10778`
 - RPC: `https://maculatus-rpc.x1eco.com/`
 - Explorer: `https://maculatus-scan.x1eco.com/`
-- Contract (`X1SentinelRegistry`): `0xB36B20436b1D8f67CFbBF83D79F5C000E823418D`
+- Contract (`X1SentinelRegistry`): `0x5C4Be8d3fF603cba1A25dB2D269B4219c72F6855`
+- Contract (`X1SentinelAIDecisionAnchor`): `0x19CA137e578A81B9FBD0f7ca5D77468e238e4646`
+- Contract (`X1SentinelDepinAnchor`): `0x331Fdd4a93D9779030de8B086B4dfa21be11c6E2`
 
 Frontend env values should align with:
 
@@ -38,7 +47,9 @@ Frontend env values should align with:
 NEXT_PUBLIC_CHAIN_ID=10778
 NEXT_PUBLIC_RPC_URL=https://maculatus-rpc.x1eco.com/
 NEXT_PUBLIC_CHAIN_EXPLORER_URL=https://maculatus-scan.x1eco.com/
-NEXT_PUBLIC_CONTRACT_ADDRESS=0xB36B20436b1D8f67CFbBF83D79F5C000E823418D
+NEXT_PUBLIC_CONTRACT_ADDRESS=0x5C4Be8d3fF603cba1A25dB2D269B4219c72F6855
+NEXT_PUBLIC_AI_DECISION_ANCHOR_ADDRESS=0x19CA137e578A81B9FBD0f7ca5D77468e238e4646
+NEXT_PUBLIC_DEPIN_ANCHOR_ADDRESS=0x331Fdd4a93D9779030de8B086B4dfa21be11c6E2
 ```
 
 ## Prototype Scope
