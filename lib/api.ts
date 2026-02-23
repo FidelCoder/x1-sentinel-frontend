@@ -8,7 +8,20 @@ import {
   SafetyReport
 } from '@/types/safety';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4010';
+const resolveApiBase = (): string => {
+  const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (configured) {
+    return configured;
+  }
+
+  if (typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app')) {
+    return 'https://x1-sentinel-backend.vercel.app';
+  }
+
+  return 'http://localhost:4010';
+};
+
+const API_BASE = resolveApiBase();
 
 const parseJson = async <T>(response: Response): Promise<T> => {
   if (!response.ok) {
