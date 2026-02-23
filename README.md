@@ -21,6 +21,8 @@ Open `http://localhost:3000`.
 - `NEXT_PUBLIC_CHAIN_EXPLORER_URL`: optional explorer URL
 - `NEXT_PUBLIC_RPC_URL`: RPC URL used for wallet network auto-add
 - `NEXT_PUBLIC_CONTRACT_ADDRESS`: deployed registry contract address
+- `NEXT_PUBLIC_AI_DECISION_ANCHOR_ADDRESS`: optional AI anchor contract address override
+- `NEXT_PUBLIC_DEPIN_ANCHOR_ADDRESS`: optional DePIN anchor contract address override
 
 ## Current Testnet Deployment
 
@@ -47,4 +49,6 @@ NEXT_PUBLIC_CONTRACT_ADDRESS=0xB36B20436b1D8f67CFbBF83D79F5C000E823418D
 - Report payload preparation flow
 - Wallet connection + onchain report submission
 - Onchain voting and report resolution actions
+- AI risk + DePIN telemetry panels in address checks
+- Onchain AI/DePIN anchor transaction flow from dashboard
 - Transaction-status tracking (prepare, sign, submit, confirm, error)

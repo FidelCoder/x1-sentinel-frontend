@@ -1,4 +1,12 @@
-import { ChainConfig, CheckResult, ReportReason, SafetyReport } from '@/types/safety';
+import {
+  AiAnchorRecord,
+  AnchorConfig,
+  ChainConfig,
+  CheckResult,
+  DepinAnchorRecord,
+  ReportReason,
+  SafetyReport
+} from '@/types/safety';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4010';
 
@@ -118,4 +126,102 @@ export const prepareResolve = async (
   });
 
   return parseJson(response);
+};
+
+export const getAnchorConfig = async (): Promise<AnchorConfig> => {
+  const response = await fetch(`${API_BASE}/api/anchors/config`, {
+    method: 'GET',
+    cache: 'no-store'
+  });
+
+  return parseJson<AnchorConfig>(response);
+};
+
+export const prepareAiAnchor = async (input: {
+  subjectAddress: string;
+  aiDecision: {
+    model?: { riskScore?: number; confidence?: number };
+    policy?: { action?: string };
+    artifacts?: {
+      inputHash?: string;
+      outputHash?: string;
+      modelVersionHash?: string;
+    };
+  };
+  metadataUri?: string;
+}): Promise<{
+  message: string;
+  contractAddress: string;
+  method: 'anchorDecision';
+  params: {
+    subjectAddress: string;
+    inputHash: string;
+    outputHash: string;
+    modelVersionHash: string;
+    riskScoreBps: number;
+    confidenceBps: number;
+    policyAction: number;
+    metadataUri: string;
+  };
+}> => {
+  const response = await fetch(`${API_BASE}/api/anchors/ai/prepare`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(input)
+  });
+
+  return parseJson(response);
+};
+
+export const prepareDepinAnchor = async (input: {
+  subjectAddress: string;
+  attestationRoot: string;
+  attestationCount: number;
+  healthScore: number;
+  confidence: number;
+  metadataUri?: string;
+}): Promise<{
+  message: string;
+  contractAddress: string;
+  method: 'anchorSubjectTelemetry';
+  params: {
+    subjectAddress: string;
+    attestationRoot: string;
+    attestationCount: number;
+    healthScoreBps: number;
+    confidenceBps: number;
+    metadataUri: string;
+  };
+}> => {
+  const response = await fetch(`${API_BASE}/api/anchors/depin/prepare`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(input)
+  });
+
+  return parseJson(response);
+};
+
+export const getAiAnchors = async (address: string, limit = 10): Promise<AiAnchorRecord[]> => {
+  const response = await fetch(`${API_BASE}/api/anchors/ai/${address}?limit=${limit}`, {
+    method: 'GET',
+    cache: 'no-store'
+  });
+
+  const payload = await parseJson<{ decisions: AiAnchorRecord[] }>(response);
+  return payload.decisions;
+};
+
+export const getDepinAnchors = async (address: string, limit = 10): Promise<DepinAnchorRecord[]> => {
+  const response = await fetch(`${API_BASE}/api/anchors/depin/${address}?limit=${limit}`, {
+    method: 'GET',
+    cache: 'no-store'
+  });
+
+  const payload = await parseJson<{ anchors: DepinAnchorRecord[] }>(response);
+  return payload.anchors;
 };

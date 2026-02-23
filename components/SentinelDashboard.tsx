@@ -1,15 +1,27 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { keccak256, toUtf8Bytes } from 'ethers';
 import {
   checkAddress,
+  getAiAnchors,
+  getAnchorConfig,
   getChainConfig,
+  getDepinAnchors,
   getRecentReports,
+  prepareAiAnchor,
+  prepareDepinAnchor,
   prepareReport,
   prepareResolve,
   prepareVote
 } from '@/lib/api';
-import { resolveReportOnchain, submitReportOnchain, voteOnReportOnchain } from '@/lib/registry';
+import {
+  anchorAiDecisionOnchain,
+  anchorDepinTelemetryOnchain,
+  resolveReportOnchain,
+  submitReportOnchain,
+  voteOnReportOnchain
+} from '@/lib/registry';
 import {
   connectWallet,
   ensureTargetNetwork,
@@ -20,7 +32,16 @@ import {
   subscribeWalletEvents,
   WalletProviderId
 } from '@/lib/wallet';
-import { ChainConfig, CheckResult, ReportReason, SafetyReport, TxStatus } from '@/types/safety';
+import {
+  AiAnchorRecord,
+  AnchorConfig,
+  ChainConfig,
+  CheckResult,
+  DepinAnchorRecord,
+  ReportReason,
+  SafetyReport,
+  TxStatus
+} from '@/types/safety';
 
 const reasons: ReportReason[] = ['Phishing', 'Scam', 'RugPull', 'MaliciousContract', 'Spam', 'Other'];
 
@@ -61,6 +82,18 @@ const defaultTxStatus: TxStatus = {
   message: 'No transaction in progress'
 };
 
+const minimumEvidenceChars = 10;
+
+const txStageLabel = (stage: TxStatus['stage']): string => {
+  if (stage === 'awaiting_signature') return 'Awaiting Signature';
+  if (stage === 'submitted') return 'Submitted';
+  if (stage === 'confirming') return 'Confirming';
+  if (stage === 'confirmed') return 'Confirmed';
+  if (stage === 'error') return 'Error';
+  if (stage === 'preparing') return 'Preparing';
+  return 'Idle';
+};
+
 export default function SentinelDashboard() {
   const [queryAddress, setQueryAddress] = useState('');
   const [checkResult, setCheckResult] = useState<CheckResult | null>(null);
@@ -72,6 +105,8 @@ export default function SentinelDashboard() {
 
   const [chainConfig, setChainConfig] = useState<ChainConfig | null>(null);
   const [chainConfigError, setChainConfigError] = useState<string | null>(null);
+  const [anchorConfig, setAnchorConfig] = useState<AnchorConfig | null>(null);
+  const [anchorConfigError, setAnchorConfigError] = useState<string | null>(null);
 
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [walletChainId, setWalletChainId] = useState<number | null>(null);
@@ -84,13 +119,68 @@ export default function SentinelDashboard() {
   const [draftReason, setDraftReason] = useState<ReportReason>('Phishing');
   const [draftEvidence, setDraftEvidence] = useState('');
   const [draftMessage, setDraftMessage] = useState<string | null>(null);
+  const [draftMessageTone, setDraftMessageTone] = useState<'info' | 'ok' | 'error'>('info');
   const [draftPayload, setDraftPayload] = useState<string>('');
   const [submittingDraft, setSubmittingDraft] = useState(false);
   const [submittingOnchain, setSubmittingOnchain] = useState(false);
+  const [anchoringAi, setAnchoringAi] = useState(false);
+  const [anchoringDepin, setAnchoringDepin] = useState(false);
   const [txStatus, setTxStatus] = useState<TxStatus>(defaultTxStatus);
+  const [txHashCopyMessage, setTxHashCopyMessage] = useState<string | null>(null);
+  const [aiAnchors, setAiAnchors] = useState<AiAnchorRecord[]>([]);
+  const [depinAnchors, setDepinAnchors] = useState<DepinAnchorRecord[]>([]);
+  const [anchorsLoading, setAnchorsLoading] = useState(false);
+  const [anchorsError, setAnchorsError] = useState<string | null>(null);
 
   const setTx = (status: TxStatus): void => {
     setTxStatus(status);
+  };
+
+  const resetReportForm = (): void => {
+    setDraftAddress('');
+    setDraftNameTag('');
+    setDraftReason('Phishing');
+    setDraftEvidence('');
+    setDraftPayload('');
+  };
+
+  const loadAnchorsForAddress = async (address: string): Promise<void> => {
+    setAnchorsLoading(true);
+    setAnchorsError(null);
+
+    try {
+      const [ai, depin] = await Promise.all([getAiAnchors(address, 6), getDepinAnchors(address, 6)]);
+      setAiAnchors(ai);
+      setDepinAnchors(depin);
+    } catch (error) {
+      setAiAnchors([]);
+      setDepinAnchors([]);
+      setAnchorsError(error instanceof Error ? error.message : 'Unable to load onchain anchors');
+    } finally {
+      setAnchorsLoading(false);
+    }
+  };
+
+  const buildDepinAttestationRoot = (result: CheckResult): string => {
+    const rootPayload = JSON.stringify({
+      address: result.depinHealth.address,
+      summary: result.depinHealth.summary,
+      telemetry: result.depinHealth.telemetry,
+      latestAttestations: result.depinHealth.latestAttestations.map((item) => ({
+        id: item.id,
+        nodeAddress: item.nodeAddress,
+        subjectAddress: item.subjectAddress,
+        signalType: item.signalType,
+        severity: item.severity,
+        healthScore: item.healthScore,
+        timestamp: item.timestamp,
+        nonce: item.nonce,
+        payloadUri: item.payloadUri,
+        signer: item.signer
+      }))
+    });
+
+    return keccak256(toUtf8Bytes(rootPayload));
   };
 
   const runCheckForAddress = async (address: string): Promise<void> => {
@@ -104,9 +194,13 @@ export default function SentinelDashboard() {
     try {
       const result = await checkAddress(address.trim());
       setCheckResult(result);
+      await loadAnchorsForAddress(result.address);
     } catch (error) {
       setCheckError(error instanceof Error ? error.message : 'Unable to run check');
       setCheckResult(null);
+      setAiAnchors([]);
+      setDepinAnchors([]);
+      setAnchorsError(null);
     } finally {
       setChecking(false);
     }
@@ -132,15 +226,18 @@ export default function SentinelDashboard() {
   useEffect(() => {
     const loadBootstrap = async (): Promise<void> => {
       try {
-        const [reports, config] = await Promise.all([getRecentReports(6), getChainConfig()]);
+        const [reports, config, anchors] = await Promise.all([getRecentReports(6), getChainConfig(), getAnchorConfig()]);
         setRecentReports(reports);
         setChainConfig(config);
+        setAnchorConfig(anchors);
         setReportFeedError(null);
         setChainConfigError(null);
+        setAnchorConfigError(null);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unable to load dashboard data';
         setReportFeedError(message);
         setChainConfigError(message);
+        setAnchorConfigError(message);
       }
 
       try {
@@ -169,11 +266,21 @@ export default function SentinelDashboard() {
     await runCheckForAddress(queryAddress);
   };
 
+  const clearCheck = (): void => {
+    setQueryAddress('');
+    setCheckResult(null);
+    setCheckError(null);
+    setAiAnchors([]);
+    setDepinAnchors([]);
+    setAnchorsError(null);
+  };
+
   const submitDraft = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
 
     setSubmittingDraft(true);
     setDraftMessage(null);
+    setDraftMessageTone('info');
 
     try {
       const payload = await prepareReport({
@@ -184,9 +291,11 @@ export default function SentinelDashboard() {
       });
 
       setDraftMessage(payload.message);
+      setDraftMessageTone('info');
       setDraftPayload(JSON.stringify(payload, null, 2));
     } catch (error) {
       setDraftMessage(error instanceof Error ? error.message : 'Unable to prepare report payload');
+      setDraftMessageTone('error');
       setDraftPayload('');
     } finally {
       setSubmittingDraft(false);
@@ -229,9 +338,138 @@ export default function SentinelDashboard() {
     return value;
   };
 
+  const resolveAiAnchorAddress = (): string => {
+    const fromChainConfig = chainConfig?.aiDecisionAnchorAddress?.trim();
+    const fromAnchorConfig = anchorConfig?.aiDecisionAnchorAddress?.trim();
+    const fromEnv = process.env.NEXT_PUBLIC_AI_DECISION_ANCHOR_ADDRESS?.trim();
+    const value = fromChainConfig || fromAnchorConfig || fromEnv;
+
+    if (!value) {
+      throw new Error('AI anchor contract is missing. Set AI_DECISION_ANCHOR_ADDRESS in backend config.');
+    }
+
+    return value;
+  };
+
+  const resolveDepinAnchorAddress = (): string => {
+    const fromChainConfig = chainConfig?.depinAnchorAddress?.trim();
+    const fromAnchorConfig = anchorConfig?.depinAnchorAddress?.trim();
+    const fromEnv = process.env.NEXT_PUBLIC_DEPIN_ANCHOR_ADDRESS?.trim();
+    const value = fromChainConfig || fromAnchorConfig || fromEnv;
+
+    if (!value) {
+      throw new Error('DePIN anchor contract is missing. Set DEPIN_ANCHOR_ADDRESS in backend config.');
+    }
+
+    return value;
+  };
+
+  const handleAnchorAiDecision = async (): Promise<void> => {
+    if (!checkResult) {
+      setTx({ stage: 'error', message: 'Run an address check before anchoring AI output.' });
+      return;
+    }
+
+    if (!walletAddress) {
+      setTx({ stage: 'error', message: 'Connect wallet before anchoring AI output.' });
+      return;
+    }
+
+    setAnchoringAi(true);
+
+    try {
+      setTx({ stage: 'preparing', message: 'Preparing AI anchor transaction...' });
+      const payload = await prepareAiAnchor({
+        subjectAddress: checkResult.address,
+        aiDecision: checkResult.aiDecision,
+        metadataUri: `x1://ai/${checkResult.address.toLowerCase()}/${Date.now()}`
+      });
+
+      await ensureTargetNetwork(chainConfig ?? undefined);
+      setTx({ stage: 'awaiting_signature', message: 'Awaiting wallet signature for AI anchor...' });
+
+      const tx = await anchorAiDecisionOnchain({
+        contractAddress: resolveAiAnchorAddress(),
+        subjectAddress: payload.params.subjectAddress,
+        inputHash: payload.params.inputHash,
+        outputHash: payload.params.outputHash,
+        modelVersionHash: payload.params.modelVersionHash,
+        riskScoreBps: payload.params.riskScoreBps,
+        confidenceBps: payload.params.confidenceBps,
+        policyAction: payload.params.policyAction,
+        metadataUri: payload.params.metadataUri
+      });
+
+      setTx({ stage: 'submitted', hash: tx.hash, message: `AI anchor submitted: ${tx.hash}` });
+      setTx({ stage: 'confirming', hash: tx.hash, message: 'Waiting for AI anchor confirmation...' });
+      await tx.wait();
+      setTx({ stage: 'confirmed', hash: tx.hash, message: `AI anchor confirmed: ${tx.hash}` });
+
+      await loadAnchorsForAddress(checkResult.address);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI anchor submission failed';
+      setTx({ stage: 'error', message });
+    } finally {
+      setAnchoringAi(false);
+    }
+  };
+
+  const handleAnchorDepinTelemetry = async (): Promise<void> => {
+    if (!checkResult) {
+      setTx({ stage: 'error', message: 'Run an address check before anchoring DePIN output.' });
+      return;
+    }
+
+    if (!walletAddress) {
+      setTx({ stage: 'error', message: 'Connect wallet before anchoring DePIN output.' });
+      return;
+    }
+
+    setAnchoringDepin(true);
+
+    try {
+      setTx({ stage: 'preparing', message: 'Preparing DePIN anchor transaction...' });
+
+      const payload = await prepareDepinAnchor({
+        subjectAddress: checkResult.address,
+        attestationRoot: buildDepinAttestationRoot(checkResult),
+        attestationCount: checkResult.depinHealth.telemetry.totalAttestations,
+        healthScore: checkResult.depinHealth.summary.healthScore,
+        confidence: checkResult.depinHealth.summary.confidence,
+        metadataUri: `x1://depin/${checkResult.address.toLowerCase()}/${Date.now()}`
+      });
+
+      await ensureTargetNetwork(chainConfig ?? undefined);
+      setTx({ stage: 'awaiting_signature', message: 'Awaiting wallet signature for DePIN anchor...' });
+
+      const tx = await anchorDepinTelemetryOnchain({
+        contractAddress: resolveDepinAnchorAddress(),
+        subjectAddress: payload.params.subjectAddress,
+        attestationRoot: payload.params.attestationRoot,
+        attestationCount: payload.params.attestationCount,
+        healthScoreBps: payload.params.healthScoreBps,
+        confidenceBps: payload.params.confidenceBps,
+        metadataUri: payload.params.metadataUri
+      });
+
+      setTx({ stage: 'submitted', hash: tx.hash, message: `DePIN anchor submitted: ${tx.hash}` });
+      setTx({ stage: 'confirming', hash: tx.hash, message: 'Waiting for DePIN anchor confirmation...' });
+      await tx.wait();
+      setTx({ stage: 'confirmed', hash: tx.hash, message: `DePIN anchor confirmed: ${tx.hash}` });
+
+      await loadAnchorsForAddress(checkResult.address);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'DePIN anchor submission failed';
+      setTx({ stage: 'error', message });
+    } finally {
+      setAnchoringDepin(false);
+    }
+  };
+
   const handleOnchainSubmit = async (): Promise<void> => {
     setSubmittingOnchain(true);
     setDraftMessage(null);
+    setDraftMessageTone('info');
 
     try {
       if (!walletAddress) {
@@ -276,14 +514,31 @@ export default function SentinelDashboard() {
         hash: tx.hash,
         message: `Transaction confirmed: ${tx.hash}`
       });
-      setDraftMessage(`Transaction confirmed: ${tx.hash}`);
+      setDraftMessage(`Report submitted successfully. Transaction confirmed: ${tx.hash}`);
+      setDraftMessageTone('ok');
+      resetReportForm();
       await refreshAfterWrite();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Onchain submission failed';
       setTx({ stage: 'error', message });
       setDraftMessage(message);
+      setDraftMessageTone('error');
     } finally {
       setSubmittingOnchain(false);
+    }
+  };
+
+  const copyTxHash = async (): Promise<void> => {
+    if (!txStatus.hash || typeof navigator === 'undefined' || !navigator.clipboard) {
+      setTxHashCopyMessage('Clipboard is unavailable in this browser.');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(txStatus.hash);
+      setTxHashCopyMessage('Transaction hash copied.');
+    } catch {
+      setTxHashCopyMessage('Unable to copy transaction hash.');
     }
   };
 
@@ -361,6 +616,13 @@ export default function SentinelDashboard() {
 
   const txStatusClass = `status ${txStatus.stage === 'error' ? 'status-error' : txStatus.stage === 'confirmed' ? 'status-ok' : 'status-info'}`;
   const walletOptions = getWalletOptions();
+  const evidenceLength = draftEvidence.trim().length;
+  const evidenceRemaining = Math.max(0, minimumEvidenceChars - evidenceLength);
+  const hasValidDraftAddress = /^0x[a-fA-F0-9]{40}$/.test(draftAddress.trim());
+  const isDraftReady = hasValidDraftAddress && evidenceLength >= minimumEvidenceChars;
+  const recentOpenReports = recentReports.filter((report) => !report.resolved).length;
+  const hasAnyReports = recentReports.length > 0;
+  const canClearCheck = queryAddress.length > 0 || checkResult !== null || checkError !== null;
 
   return (
     <main className="page-shell">
@@ -379,7 +641,14 @@ export default function SentinelDashboard() {
               {chainConfig ? `${chainConfig.chainName} · ${chainConfig.mode}` : 'Loading chain configuration...'}
             </p>
             {chainConfig?.contractAddress && <p>Contract: {shortAddress(chainConfig.contractAddress)}</p>}
+            {(chainConfig?.aiDecisionAnchorAddress || anchorConfig?.aiDecisionAnchorAddress) && (
+              <p>AI Anchor: {shortAddress(chainConfig?.aiDecisionAnchorAddress || anchorConfig?.aiDecisionAnchorAddress || '')}</p>
+            )}
+            {(chainConfig?.depinAnchorAddress || anchorConfig?.depinAnchorAddress) && (
+              <p>DePIN Anchor: {shortAddress(chainConfig?.depinAnchorAddress || anchorConfig?.depinAnchorAddress || '')}</p>
+            )}
             {chainConfigError && <p className="status status-error">{chainConfigError}</p>}
+            {anchorConfigError && <p className="status status-error">{anchorConfigError}</p>}
           </div>
 
           <div className="hero-card">
@@ -419,14 +688,41 @@ export default function SentinelDashboard() {
             {walletStatus && <p className="status status-info">{walletStatus}</p>}
           </div>
         </div>
+
+        <div className="hero-stats">
+          <article className="hero-stat">
+            <span>Indexed Reports</span>
+            <strong>{recentReports.length}</strong>
+          </article>
+          <article className="hero-stat">
+            <span>Open Reports</span>
+            <strong>{recentOpenReports}</strong>
+          </article>
+          <article className="hero-stat">
+            <span>Connected Wallet</span>
+            <strong>{walletAddress ? shortAddress(walletAddress) : 'None'}</strong>
+          </article>
+        </div>
       </section>
 
       <section className="panel reveal-2">
-        <h2>Transaction Status</h2>
+        <div className="tx-head">
+          <h2>Transaction Status</h2>
+          <span className={`stage-pill stage-${txStatus.stage}`}>{txStageLabel(txStatus.stage)}</span>
+        </div>
         <p className={txStatusClass}>
           {txStatus.message}
           {txStatus.hash ? ` (${txStatus.hash})` : ''}
         </p>
+        {txStatus.hash && (
+          <div className="tx-meta">
+            <span className="tx-hash">{shortAddress(txStatus.hash)}</span>
+            <button type="button" className="secondary" onClick={() => void copyTxHash()}>
+              Copy Hash
+            </button>
+          </div>
+        )}
+        {txHashCopyMessage && <p className="status status-info">{txHashCopyMessage}</p>}
       </section>
 
       <section className="layout-grid">
@@ -440,12 +736,19 @@ export default function SentinelDashboard() {
               onChange={(event) => setQueryAddress(event.target.value)}
               aria-label="Address to check"
             />
-            <button type="submit" disabled={checking}>
-              {checking ? 'Checking...' : 'Run Check'}
-            </button>
+            <div className="inline-actions">
+              <button type="submit" disabled={checking}>
+                {checking ? 'Checking...' : 'Run Check'}
+              </button>
+              <button type="button" className="ghost" onClick={clearCheck} disabled={!canClearCheck || checking}>
+                Clear
+              </button>
+            </div>
           </form>
+          <p className="field-hint">Enter any EVM address to fetch risk, privacy, and report context.</p>
 
           {checkError && <p className="status status-error">{checkError}</p>}
+          {!checkResult && !checkError && <p className="muted">No check result yet. Run a wallet check to begin.</p>}
 
           {checkResult && (
             <div className="result-wrap">
@@ -467,8 +770,20 @@ export default function SentinelDashboard() {
                   <strong>{checkResult.reportCount}</strong>
                 </div>
                 <div className="stat-card">
+                  <span>Unresolved</span>
+                  <strong>{checkResult.unresolvedReportCount}</strong>
+                </div>
+                <div className="stat-card">
                   <span>External Flags</span>
                   <strong>{checkResult.externalFlags.totalFlags}</strong>
+                </div>
+                <div className="stat-card">
+                  <span>DePIN Status</span>
+                  <strong>{checkResult.depinHealth.summary.status}</strong>
+                </div>
+                <div className="stat-card">
+                  <span>AI Risk Class</span>
+                  <strong>{checkResult.aiDecision.model.classification}</strong>
                 </div>
               </div>
 
@@ -490,6 +805,106 @@ export default function SentinelDashboard() {
                       <li key={tip}>{tip}</li>
                     ))}
                   </ul>
+                </div>
+              )}
+
+              <div className="detail-block">
+                <h3>DePIN Telemetry</h3>
+                <ul>
+                  <li>Status: {checkResult.depinHealth.summary.status}</li>
+                  <li>Health Score: {checkResult.depinHealth.summary.healthScore}/100</li>
+                  <li>Confidence: {(checkResult.depinHealth.summary.confidence * 100).toFixed(1)}%</li>
+                  <li>Total Attestations: {checkResult.depinHealth.telemetry.totalAttestations}</li>
+                  <li>Unique Nodes: {checkResult.depinHealth.telemetry.uniqueNodes}</li>
+                </ul>
+              </div>
+
+              <div className="detail-block">
+                <h3>AI Decision</h3>
+                <ul>
+                  <li>Classification: {checkResult.aiDecision.model.classification}</li>
+                  <li>Risk Score: {checkResult.aiDecision.model.riskScore}/100</li>
+                  <li>Confidence: {(checkResult.aiDecision.model.confidence * 100).toFixed(1)}%</li>
+                  <li>Policy Action: {checkResult.aiDecision.policy.action}</li>
+                  <li>Auto Execute: {checkResult.aiDecision.policy.autoExecute ? 'Yes' : 'No'}</li>
+                </ul>
+                <p className="muted">{checkResult.aiDecision.model.summary}</p>
+                {checkResult.aiDecision.model.reasons.length > 0 && (
+                  <ul>
+                    {checkResult.aiDecision.model.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                )}
+                <div className="action-row">
+                  <button
+                    type="button"
+                    onClick={() => void handleAnchorAiDecision()}
+                    disabled={!walletAddress || walletNetworkMismatch || anchoringAi}
+                  >
+                    {anchoringAi ? 'Anchoring AI...' : 'Anchor AI Onchain'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => void handleAnchorDepinTelemetry()}
+                    disabled={!walletAddress || walletNetworkMismatch || anchoringDepin}
+                  >
+                    {anchoringDepin ? 'Anchoring DePIN...' : 'Anchor DePIN Onchain'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => void loadAnchorsForAddress(checkResult.address)}
+                    disabled={anchorsLoading}
+                  >
+                    {anchorsLoading ? 'Loading Anchors...' : 'Refresh Anchors'}
+                  </button>
+                </div>
+              </div>
+
+              {(aiAnchors.length > 0 || depinAnchors.length > 0 || anchorsError) && (
+                <div className="detail-block">
+                  <h3>Onchain Anchors</h3>
+                  {anchorsError && <p className="status status-error">{anchorsError}</p>}
+
+                  {aiAnchors.length > 0 && (
+                    <div className="anchor-section">
+                      <strong>AI Anchors ({aiAnchors.length})</strong>
+                      <div className="feed-list">
+                        {aiAnchors.map((anchor) => (
+                          <article key={`ai-${anchor.decisionId}`} className="feed-item">
+                            <div className="feed-item-top">
+                              <span className="chip">AI #{anchor.decisionId}</span>
+                              <time>{new Date(anchor.timestamp).toLocaleString()}</time>
+                            </div>
+                            <p>Policy: {anchor.policyAction}</p>
+                            <p>Risk: {anchor.riskScore.toFixed(2)}% · Confidence: {(anchor.confidence * 100).toFixed(1)}%</p>
+                            <p>Publisher: {shortAddress(anchor.publisher)}</p>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {depinAnchors.length > 0 && (
+                    <div className="anchor-section">
+                      <strong>DePIN Anchors ({depinAnchors.length})</strong>
+                      <div className="feed-list">
+                        {depinAnchors.map((anchor) => (
+                          <article key={`depin-${anchor.anchorId}`} className="feed-item">
+                            <div className="feed-item-top">
+                              <span className="chip">DePIN #{anchor.anchorId}</span>
+                              <time>{new Date(anchor.timestamp).toLocaleString()}</time>
+                            </div>
+                            <p>Attestations: {anchor.attestationCount}</p>
+                            <p>Health: {anchor.healthScore.toFixed(2)}% · Confidence: {(anchor.confidence * 100).toFixed(1)}%</p>
+                            <p>Publisher: {shortAddress(anchor.publisher)}</p>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -547,6 +962,18 @@ export default function SentinelDashboard() {
                 <strong>{shortAddress(report.targetAddress)}</strong>
                 <p>{report.evidence}</p>
                 <div className="feed-votes">👍 {report.upvotes} · 👎 {report.downvotes}</div>
+                <div className="action-row">
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      setQueryAddress(report.targetAddress);
+                      void runCheckForAddress(report.targetAddress);
+                    }}
+                  >
+                    Inspect Address
+                  </button>
+                </div>
                 {report.resolved && (
                   <div className="status status-info">
                     {report.malicious ? 'Resolved as malicious' : 'Resolved as safe'}
@@ -555,6 +982,7 @@ export default function SentinelDashboard() {
               </article>
             ))}
           </div>
+          {!hasAnyReports && <p className="muted">No reports indexed yet. Submit the first report to start the feed.</p>}
         </aside>
       </section>
 
@@ -563,6 +991,11 @@ export default function SentinelDashboard() {
         <p className="muted">
           Draft payload with API validation, then submit onchain through your connected wallet.
         </p>
+        <div className="form-health">
+          <span>Evidence length: {evidenceLength}</span>
+          <span>{evidenceRemaining > 0 ? `${evidenceRemaining} chars to minimum` : 'Ready to submit'}</span>
+          <span>{walletAddress ? 'Wallet connected' : 'Wallet not connected'}</span>
+        </div>
 
         <form className="draft-form" onSubmit={submitDraft}>
           <input
@@ -589,26 +1022,29 @@ export default function SentinelDashboard() {
             placeholder="Evidence and context"
             value={draftEvidence}
             onChange={(event) => setDraftEvidence(event.target.value)}
-            minLength={10}
+            minLength={minimumEvidenceChars}
             required
           />
 
           <div className="action-row">
-            <button type="submit" disabled={submittingDraft}>
+            <button type="submit" disabled={submittingDraft || !isDraftReady}>
               {submittingDraft ? 'Preparing...' : 'Prepare Payload'}
             </button>
             <button
               type="button"
               className="secondary"
               onClick={() => void handleOnchainSubmit()}
-              disabled={submittingOnchain || !walletAddress}
+              disabled={submittingOnchain || !walletAddress || !isDraftReady || walletNetworkMismatch}
             >
               {submittingOnchain ? 'Submitting...' : 'Submit Onchain'}
+            </button>
+            <button type="button" className="ghost" onClick={resetReportForm} disabled={submittingDraft || submittingOnchain}>
+              Reset Form
             </button>
           </div>
         </form>
 
-        {draftMessage && <p className="status status-info">{draftMessage}</p>}
+        {draftMessage && <p className={`status status-${draftMessageTone}`}>{draftMessage}</p>}
         {draftPayload && <pre className="payload-preview">{draftPayload}</pre>}
       </section>
     </main>
